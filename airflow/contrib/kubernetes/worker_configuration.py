@@ -31,11 +31,17 @@ class WorkerConfiguration:
 
     def _get_init_containers(self, volume_mounts):
         """When using git to retrieve the DAGs, use the GitSync Init Container"""
-        # If we're using volume claims to mount the dags, no init container is needed
-        if self.kube_config.dags_volume_claim:
+        # If we're using volume claims to mount the dags, no init container is needed.
+        # If git_repo and git_branch are also not specified, assume DAGs are built-in.
+        if (self.kube_config.dags_volume_claim or
+                (not self.kube_config.git_repo or not self.kube_config.git_branch)):
             return []
 
         # Otherwise, define a git-sync init container
+        dags_folder = self.kube_config.dags_folder.rstrip(os.sep)
+        git_sync_root = os.path.dirname(dags_folder)
+        git_sync_dest = os.path.basename(dags_folder)
+
         init_environment = [{
             'name': 'GIT_SYNC_REPO',
             'value': self.kube_config.git_repo
@@ -44,10 +50,10 @@ class WorkerConfiguration:
             'value': self.kube_config.git_branch
         }, {
             'name': 'GIT_SYNC_ROOT',
-            'value': '/tmp'
+            'value': git_sync_root
         }, {
             'name': 'GIT_SYNC_DEST',
-            'value': 'dags'
+            'value': git_sync_dest
         }, {
             'name': 'GIT_SYNC_ONE_TIME',
             'value': 'true'
@@ -75,7 +81,6 @@ class WorkerConfiguration:
     def _get_environment(self):
         """Defines any necessary environment variables for the pod executor"""
         env = {
-            'AIRFLOW__CORE__DAGS_FOLDER': '/tmp/dags',
             'AIRFLOW__CORE__EXECUTOR': 'LocalExecutor'
         }
         if self.kube_config.airflow_configmap:
@@ -115,28 +120,43 @@ class WorkerConfiguration:
                 vo['emptyDir'] = {}
             return vo
 
-        volumes = [
-            _construct_volume(
-                dags_volume_name,
-                self.kube_config.dags_volume_claim,
-                self.kube_config.dags_volume_subpath
-            ),
-            _construct_volume(
-                logs_volume_name,
-                self.kube_config.logs_volume_claim
+        volumes = []
+        volume_mounts = []
+
+        # Is using a dags volume claim or git-sync, mount a dags volume
+        if self.kube_config.dags_volume_claim or self.kube_config.git_repo:
+            volumes.append(
+                _construct_volume(
+                    dags_volume_name,
+                    self.kube_config.dags_volume_claim,
+                    self.kube_config.dags_volume_subpath
+                )
             )
-        ]
-        volume_mounts = [{
-            'name': dags_volume_name,
-            'mountPath': os.path.join(
-                self.kube_config.dags_folder,
-                self.kube_config.git_subpath
-            ),
-            'readOnly': True
-        }, {
-            'name': logs_volume_name,
-            'mountPath': self.kube_config.base_log_folder
-        }]
+            volume_mounts.append(
+                {
+                    'name': dags_volume_name,
+                    'mountPath': os.path.join(
+                        self.kube_config.dags_folder,
+                        self.kube_config.git_subpath
+                    ),
+                    'readOnly': True
+                }
+            )
+
+        # Only mount a logs volume if logs_volume_claim is set
+        if self.kube_config.logs_volume_claim:
+            volumes.append(
+                _construct_volume(
+                    logs_volume_name,
+                    self.kube_config.logs_volume_claim
+                )
+            )
+            volume_mounts.append(
+                {
+                    'name': logs_volume_name,
+                    'mountPath': self.kube_config.base_log_folder
+                }
+            )
 
         # Mount the airflow.cfg file via a configmap the user has specified
         if self.kube_config.airflow_configmap:

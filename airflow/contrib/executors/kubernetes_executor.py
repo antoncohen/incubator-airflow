@@ -106,7 +106,7 @@ class KubeConfig:
         self.core_configuration = configuration_dict['core']
         self.kube_secrets = configuration_dict.get('kubernetes_secrets', {})
         self.airflow_home = configuration.get(self.core_section, 'airflow_home')
-        self.dags_folder = configuration.get(self.core_section, 'dags_folder')
+        self.dags_folder = self.safe_get(self.core_section, 'dags_folder', '/tmp/dags')
         self.parallelism = configuration.getint(self.core_section, 'PARALLELISM')
         self.worker_container_repository = configuration.get(
             self.kubernetes_section, 'worker_container_repository')
@@ -186,14 +186,6 @@ class KubeConfig:
         # configmap
         self.airflow_configmap = self.safe_get(self.kubernetes_section,
                                                'airflow_configmap', None)
-
-        self._validate()
-
-    def _validate(self):
-        if not self.dags_volume_claim and (not self.git_repo or not self.git_branch):
-            raise AirflowConfigException(
-                'In kubernetes mode the following must be set in the `kubernetes` '
-                'config section: `dags_volume_claim` or `git_repo and git_branch`')
 
 
 class KubernetesJobWatcher(multiprocessing.Process, LoggingMixin, object):
